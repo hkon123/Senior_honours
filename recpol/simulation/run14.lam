@@ -1,0 +1,218 @@
+####################################
+####	ULOOP			####
+####################################
+variable jbn uloop 1  # run n simulations
+variable startfrom equal 0
+variable jn equal ${jbn}+${startfrom}
+print ${jn}
+variable seed equal (11+4)*51-2*11
+variable seedr equal (11+2)*22
+
+#
+variable N equal 2000
+timestep 0.01
+variable Dt equal 100000
+variable Temp equal 1.0
+variable Norm equal 0.88585294441338
+if "${jn} <= 20" then "variable E equal 1.4"
+#if "${jn} > 2 && ${jn} <= 4" then "variable E equal 1.5"
+#if "${jn} > 4 && ${jn} <= 6" then "variable E equal 2.0"
+#if "${jn} > 6 && ${jn} <= 8" then "variable E equal 2.5"
+#if "${jn} > 8 && ${jn} <= 10" then "variable E equal 3.0"
+#if "${jn} > 10 && ${jn} <= 12" then "variable E equal 3.5"
+#if "${jn} > 12 && ${jn} <= 14" then "variable E equal 4.0"
+#if "${jn} > 14 && ${jn} <= 16" then "variable E equal 4.5"
+#if "${jn} > 16 && ${jn} <= 18" then "variable E equal 5.0"
+
+#
+####################################
+####	DEFINTIONS 	########
+####################################
+#
+variable N equal 500
+variable folder index RW_Dt${Dt}_E${E}
+shell mkdir ${folder}
+variable SimOutType index RW${jn}Dt${Dt}E${E}
+variable rname index INIT/Poly.N${N}.dat
+variable simname index Poly.N${N}.${SimOutType}
+#
+units lj
+atom_style angle
+boundary        p p p
+neighbor 1.3 bin
+neigh_modify every 5 delay 5 check yes
+#
+restart 1000000 ${folder}/Restart.neutr.${simname}.
+print ${rname}
+read_data ${rname}
+
+####################################
+####	GROUPS	             #######
+####################################
+group blue type 1
+group red type 2
+group grey type 3
+
+change_box all x final -60 60 y final -60 60 z final -60 60 boundary f f f units box
+
+####################################
+####	ANGLE	             #######
+####################################
+angle_style   cosine
+angle_coeff  1 3.0  #20 sigma for realistic DNA (1 bead = 2.5 nm)
+
+####################################
+####	PAIRS	             #######
+####################################
+pair_style  soft 2.5
+pair_modify     shift yes
+pair_coeff      * * 20 1.12246152962189
+
+variable prefactor equal ramp(0,50)
+fix pushapart all adapt 1 pair soft a * * v_prefactor
+
+####################################
+####	FENE	             #######
+####################################
+bond_style   fene
+special_bonds fene#<=== I M P O R T A N T (new command)
+bond_coeff   1  30.0   1.6  1.0  1.0
+
+####################################
+####	FIXES	             #######
+####################################
+fix 1 all   nve
+fix 2 all  langevin   1.0 1.0   1.0   ${seed}
+
+####################################
+####	WALL	             #######
+####################################
+fix WALL all wall/lj126 xhi EDGE 1.0 1.0 1.122462048 xlo EDGE 1.0 1.0 1.122462048 yhi EDGE 1.0 1.0 1.122462048 ylo EDGE 1.0 1.0 1.122462048 zhi EDGE 1.0 1.0 1.122462048 zlo EDGE 1.0 1.0 1.122462048 units box
+
+####################################
+####	RESET TIME             #######
+####################################
+reset_timestep 0
+
+####################################
+####	SWAP - ATOMS         #######
+####################################
+##HERE I USE fix atom/swap to attempt an atom swap between types
+## In theory, I don't need to do a loop as the fix does it every
+## N timesteps
+##FIRST Dt IS NOT SWAPPING ANYWAY!
+group Polymer type 1 2 3
+fix Aswap Polymer atom/swap ${Dt} ${N} ${seed} ${Temp} semi-grand yes types 1 2 3 mu 0.0 0.0 0.0
+variable Swaps equal f_Aswap[2]/1.0
+variable Attempts equal f_Aswap[1]/1.0
+
+####################################
+####    THERMO AND INTEGRATION
+####################################
+timestep 0.01
+thermo 10000
+thermo_style   custom   step  temp  epair vol cpu v_Attempts v_Swaps
+
+####################################
+####	EQUILIBRATION        #######
+####################################
+#THIS IS TO TEST
+#PUT LARGER NUMBER WHEN DOING ACTUAL SIMULATIONS
+run 100000
+
+
+unfix pushapart
+unfix Aswap
+reset_timestep 0
+
+#######################################################
+####	PAIRS -- REPULSIVE + REDS FERROMAGN 	#######
+#######################################################
+#ENERGYSCALE
+variable Et equal ${E}/${Norm}
+
+pair_style  lj/cut 1.8
+pair_modify     shift yes
+pair_coeff      * *  1.0 1.0 1.12246152962189
+
+pair_coeff      1 1  ${Et} 1.0 1.8
+pair_coeff      1 2  1.0 1.0 1.12246152962189
+pair_coeff      1 3  1.0 1.0 1.12246152962189
+
+pair_coeff      2 2  ${Et} 1.0 1.8
+pair_coeff      2 3  1.0 1.0 1.12246152962189
+
+pair_coeff      3 3  1.0 1.0 1.12246152962189
+#######################################################
+
+
+########################
+## PER PRIMI VICINI   ##
+########################
+bond_style harmonic
+special_bonds lj 1 1 1
+bond_coeff 1 200 1.12246
+#bond_style fene
+#special_bonds fene
+#bond_coeff 1 30 1.6 1.0 1.0
+
+########################
+## RECOLOR #############
+########################
+group Polymer type 1 2 3
+variable smooth equal 10
+variable dtsmooth equal ${Dt}/${smooth}
+variable Nsmooth equal ${N}/${smooth}
+fix Aswap Polymer atom/swap ${dtsmooth} ${Nsmooth} ${seedr} ${Temp} semi-grand yes types 1 2 3 mu 0.0 0.0 0.0
+variable Swaps equal f_Aswap[2]/1.0
+variable Attempts equal f_Aswap[1]/1.0
+
+####################################
+####    DUMPS                 #######
+####################################
+##VMD
+#dump 1 all custom 1000 ${folder}/${simname}.lammpstrj id mol type x y z
+#dump_modify  1   format "%d %d %d %.5f %.5f %.5f"
+
+##DAT
+dump 2 all custom 100000 ${folder}/${simname}.* id type x y z ix iy iz
+#dump_modify   2   format "%d %d %.5f %.5f %.5f %d %d %d"
+
+##CFG
+#dump 3 all cfg 1000 ${folder}/CFG/${simname}.tot.*.cfg mass type xs ys zs id mol type
+#dump_modify 3 element N C O Ca Xe
+
+##XYZ
+dump 4 all xyz 100000 XYZ_${simname}.xyz
+dump_modify 4 element C O N Xe
+
+###########################
+thermo 10000
+thermo_style   custom   step  temp  epair vol cpu v_Attempts v_Swaps
+run 50000000
+
+################
+## ULOOP    ####
+################
+clear
+variable rname delete
+variable simname delete
+variable folder delete
+variable seed delete
+variable E delete
+variable RW delete
+variable SimOutType delete
+variable SimInType delete
+variable jn delete
+variable jf delete
+
+next jbn
+jump SELF #last line!!!
+
+### If e.g. I run this on 10 partitions of 1 processor,
+### and initialise the variable with 'uloop N'
+### it will run 10 simulations with 'jobnumber' taking
+### values 1-10. Then when a particular simulation finishes, the
+### script will be run again with the next value of jobnumber,
+### until N simulations have been run.
+## SO ULOOP IS "SERIAL" BUT FOR SURE 10x1 PROCs ARE ALWAYS BUSY
